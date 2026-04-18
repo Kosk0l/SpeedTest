@@ -1,0 +1,87 @@
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SharpMem.h>
+
+// Пины SPI для Sharp Memory Display (ESP32 DevKit V1)
+#define SHARP_SCK  18
+#define SHARP_MOSI 23
+#define SHARP_CS    5
+
+// Размер дисплея (пример: 400x240)
+#define SHARP_WIDTH  400
+#define SHARP_HEIGHT 240
+
+// Инициализация дисплея
+Adafruit_SharpMem display(SHARP_SCK, SHARP_MOSI, SHARP_CS, SHARP_WIDTH, SHARP_HEIGHT);
+
+void setup() {
+  Serial.begin(115200);
+  Serial.println("Sharp pixel draw test");
+
+  display.begin(); // Инициализация дисплея
+  display.clearDisplay(); // Очистка буфера
+}
+
+void loop() {
+  display.clearDisplay();
+
+  // Рисуем горизонтальную линию из пикселей
+  for (int x = 50; x < 150; x += 2) {
+    display.drawPixel(x, 120,  0); // BLACK = включенный пиксель  [oai_citation:0‡Adafruit](https://learn.adafruit.com/adafruit-sharp-memory-display-breakout/programming?utm_source=chatgpt.com)
+  }
+
+  // Рисуем вертикальную линию
+  for (int y = 80; y < 160; y += 2) {
+    display.drawPixel(200, y,  0);
+  }
+
+  // Рисуем диагональ
+  for (int i = 0; i < 50; i += 2) {
+    display.drawPixel(250 + i, 50 + i,  0);
+  }
+
+  // Обязательно обновляем дисплей
+  display.refresh(); // обновляет все нарисованные пиксели  [oai_citation:1‡Adafruit](https://learn.adafruit.com/adafruit-sharp-memory-display-breakout/programming?utm_source=chatgpt.com)
+
+  delay(2000);
+}
+
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SharpMem.h>
+#include <Fonts/FreeMono9pt7b.h>  // подключаем шрифт
+
+// Пины SPI
+#define SHARP_SCK  18
+#define SHARP_MOSI 23
+#define SHARP_CS    5
+
+// Размер дисплея Sharp
+#define SHARP_WIDTH  400
+#define SHARP_HEIGHT 240
+
+Adafruit_SharpMem display(SHARP_SCK, SHARP_MOSI, SHARP_CS, SHARP_WIDTH, SHARP_HEIGHT);
+
+void setup() {
+  Serial.begin(115200);
+
+  display.begin();        // инициализация дисплея
+  display.clearDisplay(); // очистка буфера
+
+  // // Устанавливаем кастомный шрифт
+  // display.setFont(&FreeMono9pt7b);
+}
+
+void loop() {
+  display.clearDisplay();
+
+  display.setCursor(10, 40);          
+  display.setTextColor(0);          
+  display.print("ESP32 + GFX");
+
+  display.setCursor(10, 80);
+  display.print("FreeMono9pt7b!");
+
+  display.refresh();               
+  delay(2000);
+}
