@@ -1,25 +1,26 @@
-#include "imu.h"
+#include "internal/gps/domain/GpsData.h"
+#include "internal/gps/service/gps.h"
+#include "internal/gps/domain/GpsRawData.h"
 
 
-ImuData imu::read() {
-    ImuRawData raw;
-    ImuData out{};
-
+GpsData gps::read() {
+    GpsRawData raw;
+    GpsData out{};
+    
     // Вызов repository метода; записать данные в raw
     if (!driver->readRaw(raw) || !raw.valid) {
         out.valid = false;
         return out;
     }
 
-    out.ax = raw.ax;
-    out.ay = raw.ay;
-    out.az = raw.az;
-
-    out.gx = raw.gx;
-    out.gy = raw.gy;
-    out.gz = raw.gz;
+    // Нормализация данных
+    out.lat = raw.lat;
+    out.lon = raw.lon;
+    out.alt = raw.alt;
 
     out.time = raw.time;
+    out.speed = raw.speed;
+
     out.valid = true;
 
     return out;
@@ -29,8 +30,8 @@ ImuData imu::read() {
 //====================================================================================================
 
 
-void imu::update() {
-    ImuData data = read();
+void gps::update() {
+    GpsData data = read();
 
     if (data.valid) {
         lastValue = data;
@@ -38,6 +39,6 @@ void imu::update() {
 }
 
 
-ImuData imu::get() {
+GpsData gps::get() {
     return lastValue;
 }

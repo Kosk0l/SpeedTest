@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include <SparkFun_u-blox_GNSS_Arduino_Library.h>
-#include "gpsrepo.h"
+#include "internal/gps/service/gpsrepo.h"
 
 class NeoM9NRepo : public gpsrepo {
 private:

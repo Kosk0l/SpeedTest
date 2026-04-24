@@ -1,7 +1,8 @@
 #include <memory>
-#include "gpsrepo.h"
-#include "GpsData.h"
 #include <Arduino.h>
+#include "internal/gps/service/gpsrepo.h"
+#include "internal/gps/domain/GpsData.h"
+
 
 
 class gps {

@@ -1,4 +1,4 @@
-#include <NeoM9NRepo.h>
+#include <internal/gps/repo/NeoM9NRepo.h>
 
 bool NeoM9NRepo::readRaw(GpsRawData& out) {
     if (!initialized) return false;

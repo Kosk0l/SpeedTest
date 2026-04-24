@@ -1,6 +1,6 @@
 #include <memory>
-#include "imurepo.h"
-#include "ImuData.h"
+#include "internal/imu/service/imurepo.h"
+#include "internal/imu/domain/ImuData.h"
 
 // Abstration - imu module, service
 class imu {

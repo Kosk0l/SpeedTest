@@ -2,7 +2,7 @@
 #include <Adafruit_ICM20948.h>
 #include <Adafruit_Sensor.h>
 #include <Wire.h>
-#include "imurepo.h"
+#include "internal/imu/service/imurepo.h"
 
 
 class Icm20948Repo : public imurepo {
