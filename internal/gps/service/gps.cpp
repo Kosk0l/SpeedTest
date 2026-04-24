@@ -7,7 +7,7 @@ GpsData gps::read() {
     GpsRawData raw;
     GpsData out{};
     
-    // Вызов repository метода и записать в raw данные
+    // Вызов repository метода; записать данные в raw
     if (!driver->readRaw(raw) || !raw.valid) {
         out.valid = false;
         return out;
@@ -31,7 +31,11 @@ GpsData gps::read() {
 
 
 void gps::update() {
-    lastValue = read();
+    GpsData data = read();
+
+    if (data.valid) {
+        lastValue = data;
+    }
 }
 
 

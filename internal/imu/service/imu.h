@@ -1,21 +1,22 @@
 #include <memory>
 #include "imurepo.h"
+#include "ImuData.h"
 
 // Abstration - imu module, service
 class imu {
 private:
-    std::shared_ptr<imurepo> imurepo; // DI
+    std::shared_ptr<imurepo> driver; // DI
+    ImuData lastValue; // кеш последнего значения
 public:
-    imu();
-    ~imu();
+    // Constructor
+    imu(std::unique_ptr<imurepo> d) : driver(std::move(d)) {}
+
+    // Получить данные из repository 
+    ImuData read();
+
+    // Обновить кеш
+    void update();
+    // Получить кеш
+    ImuData get();
 };
 
-
-// Constructor
-imu::imu() {
-}
-
-
-// Destructor
-imu::~imu() {
-}

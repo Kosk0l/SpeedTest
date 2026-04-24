@@ -11,6 +11,7 @@ private:
 public:
     // Constructor
     gps(std::unique_ptr<gpsrepo> d) : driver(std::move(d)){}
+    
     // Получить данные из repository
     GpsData read();
 
