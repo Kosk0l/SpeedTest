@@ -1,5 +1,32 @@
 #include <internal/gps/repo/NeoM9NRepo.h>
 
+
+bool NeoM9NRepo::init() {
+    // UART
+    serial.begin(38400, SERIAL_8N1, 16, 17);
+    delay(100);
+
+    // GNSS
+    if (!gnss.begin(serial)) {
+        initialized = false;
+        return false;
+    }
+
+    // Частота обновления 
+    gnss.setNavigationFrequency(5);
+    // Проверить что получает PVT данные
+    gnss.setAutoPVT(true);
+    // уменьшить лишний вывод NMEA
+    gnss.setI2COutput(COM_TYPE_UBX); 
+
+    // 4. Проверка фикса
+    int fixType = gnss.getFixType();
+
+    initialized = true;
+    return true;
+}
+
+
 bool NeoM9NRepo::readRaw(GpsRawData& out) {
     if (!initialized) return false;
 
