@@ -17,7 +17,7 @@ private:
 
 public:
     // Constructor
-    NavCore::NavCore();
+    NavCore();
     // main method - calculation 
     void update(const GpsData& gps, const ImuData& imu);
     // Return state

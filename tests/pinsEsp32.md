@@ -12,5 +12,5 @@ GPS:
     RX 17
     TX 16
 
-Проблема ICM:
-#define ICM20948_I2CADDR_DEFAULT 0x68 ///69 
+Проблема ICM библиотеки:
+#define ICM20948_I2CADDR_DEFAULT 0x68 ///69 - изначально // меняем на 68

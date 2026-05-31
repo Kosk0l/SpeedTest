@@ -1,5 +1,5 @@
 #include <cstdint>
-
+#pragma once
 
 struct GpsData {
     double lat;

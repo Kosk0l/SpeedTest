@@ -5,13 +5,34 @@
 
 NavCore::NavCore()
     : prevGps{},
-      hasPrev(false),
-      startTime(0),
-      filteredSpeed(0.0f),
-      strokeCount(0)
+    hasPrev(false),
+    startTime(0),
+    filteredSpeed(0.0f),
+    strokeCount(0)
 {
     state = {};
 }
+
+
+// Calculation distation 
+static float distanceMeters(double lat1, double lon1, double lat2, double lon2) {
+    const double R = 6371000.0; // радиус Земли (м)
+
+    double dLat = (lat2 - lat1) * DEG_TO_RAD;
+    double dLon = (lon2 - lon1) * DEG_TO_RAD;
+
+    lat1 *= DEG_TO_RAD;
+    lat2 *= DEG_TO_RAD;
+
+    double a = sin(dLat / 2) * sin(dLat / 2) +
+               sin(dLon / 2) * sin(dLon / 2) *
+               cos(lat1) * cos(lat2);
+
+    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+    return R * c;
+}
+
 
 
 void NavCore::update(const GpsData& gps, const ImuData& imu) {
@@ -50,7 +71,7 @@ void NavCore::update(const GpsData& gps, const ImuData& imu) {
 
     state.currentSpeed = filteredSpeed;
 
-    // --- pace 500 ---
+    // pace 500
     if (filteredSpeed > 0.1f) {
         state.pace500 = 500.0f / filteredSpeed;
     }
@@ -79,21 +100,3 @@ const NavigationState& NavCore::get() const {
 }
 
 
-// Calculation distation 
-static float distanceMeters(double lat1, double lon1, double lat2, double lon2) {
-    const double R = 6371000.0; // радиус Земли (м)
-
-    double dLat = (lat2 - lat1) * DEG_TO_RAD;
-    double dLon = (lon2 - lon1) * DEG_TO_RAD;
-
-    lat1 *= DEG_TO_RAD;
-    lat2 *= DEG_TO_RAD;
-
-    double a = sin(dLat / 2) * sin(dLat / 2) +
-               sin(dLon / 2) * sin(dLon / 2) *
-               cos(lat1) * cos(lat2);
-
-    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return R * c;
-}

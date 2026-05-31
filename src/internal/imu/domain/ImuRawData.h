@@ -1,5 +1,5 @@
 #include <cstdint>
-
+#pragma once
 
 struct ImuRawData {
     float ax, ay, az;
