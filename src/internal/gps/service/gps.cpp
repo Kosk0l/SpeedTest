@@ -2,43 +2,36 @@
 #include "internal/gps/service/gps.h"
 #include "internal/gps/domain/GpsRawData.h"
 
-
-GpsData gps::read() {
-    GpsRawData raw;
+bool gps::update() {
+    GpsRawData raw{};
     GpsData out{};
-    
-    // Вызов repository метода; записать данные в raw
-    if (!driver->readRaw(raw) || !raw.valid) {
-        out.valid = false;
-        return out;
+
+    // Вызов driver
+    if (!driver || !driver->readRaw(raw))
+    {
+        return false;
     }
 
-    // Нормализация данных
-    out.lat = raw.lat;
-    out.lon = raw.lon;
-    out.alt = raw.alt;
+    // Валидность raw
+    if (!raw.valid)
+    {
+        return false;
+    }
 
-    out.time = raw.time;
+    // Нормализация
+    out.lat   = raw.lat;
+    out.lon   = raw.lon;
+    out.alt   = raw.alt;
+    
     out.speed = raw.speed;
-
+    out.time  = raw.time;
     out.valid = true;
 
-    return out;
+    // cache update
+    lastValue = out;
+    return true;
 }
 
-
-//====================================================================================================
-
-
-void gps::update() {
-    GpsData data = read();
-
-    if (data.valid) {
-        lastValue = data;
-    }
-}
-
-
-GpsData gps::get() {
+GpsData gps::get() const {
     return lastValue;
 }

@@ -5,18 +5,15 @@
 // Abstration - imu module, service
 class imu {
 private:
-    std::shared_ptr<imurepo> driver; // DI
+    std::unique_ptr<imurepo> driver; // DI
     ImuData lastValue; // кеш последнего значения
 public:
-    // Constructor
-    imu(std::unique_ptr<imurepo> d) : driver(std::move(d)) {}
+    // Конструктор
+    explicit imu(std::unique_ptr<imurepo> d) : driver(std::move(d)) {}
 
-    // Получить данные из repository 
-    ImuData read();
-
-    // Обновить кеш
-    void update();
-    // Получить кеш
+    // Обновить данные
+    bool update();
+    // Получить данные
     ImuData get();
 };
 

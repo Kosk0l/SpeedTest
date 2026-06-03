@@ -1,6 +1,5 @@
 #include "internal/imu/repo/Icm20948Repo.h"
 
-
 bool Icm20948Repo::init() {
     if (!icm.begin_I2C()) {
         initialized = false;
@@ -10,7 +9,6 @@ bool Icm20948Repo::init() {
     initialized = true;
     return true;
 }
-
 
 bool Icm20948Repo::readRaw(ImuRawData& out) {
     if (!initialized) return false;

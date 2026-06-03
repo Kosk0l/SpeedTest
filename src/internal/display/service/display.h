@@ -1,22 +1,14 @@
+#pragma once
 #include <memory>
-#include "internal/display/service/displayrepo.h"
+#include "displayrepo.h"
 
-// Abstraction - display module, service
 class display {
 private:
-    std::shared_ptr<displayrepo> displayrepo; // DI
+    std::unique_ptr<displayrepo> driver;
+
 public:
-    display();
-    ~display();
+    display(std::unique_ptr<displayrepo> d) : driver(std::move(d)) {}
+
+    bool init();
+    void update(const NavigationState& state);
 };
-
-
-// Constructor
-display::display() {
-}
-
-
-// Destructor
-display::~display()
-{
-}

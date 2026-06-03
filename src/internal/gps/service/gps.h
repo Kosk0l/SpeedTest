@@ -1,24 +1,19 @@
-#include <memory>
+#pragma once
 #include <Arduino.h>
+#include <memory>
 #include "internal/gps/service/gpsrepo.h"
 #include "internal/gps/domain/GpsData.h"
-
-
 
 class gps {
 private:
     std::unique_ptr<gpsrepo> driver; // DI
-    GpsData lastValue; // кеш последнего значения
+    GpsData lastValue{}; // Cache
 public:
-    // Constructor
-    gps(std::unique_ptr<gpsrepo> d) : driver(std::move(d)){}
-    
-    // Получить данные из repository
-    GpsData read();
+    // Конструктор
+    explicit gps(std::unique_ptr<gpsrepo> d) : driver(std::move(d)) {}
 
-    // Обновить кеш
-    void update();
-    // Получить кеш
-    GpsData get();
+    // Обновить данные 
+    bool update();
+    // Получение данных
+    GpsData get() const;
 };
-
