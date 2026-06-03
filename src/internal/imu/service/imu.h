@@ -2,7 +2,6 @@
 #include "internal/imu/service/imurepo.h"
 #include "internal/imu/domain/ImuData.h"
 
-// Abstration - imu module, service
 class imu {
 private:
     std::unique_ptr<imurepo> driver; // DI

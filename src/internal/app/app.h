@@ -22,6 +22,6 @@ private:
 public:
     App();
 
-    void init();
+    bool init();
     void update();
 };
