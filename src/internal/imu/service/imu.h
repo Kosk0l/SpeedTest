@@ -9,6 +9,7 @@ private:
 public:
     // Конструктор
     explicit imu(std::unique_ptr<imurepo> d) : driver(std::move(d)) {}
+    bool init();
 
     // Обновить данные
     bool update();

@@ -11,6 +11,7 @@ private:
 public:
     // Конструктор
     explicit gps(std::unique_ptr<gpsrepo> d) : driver(std::move(d)) {}
+    bool init();
 
     // Обновить данные 
     bool update();

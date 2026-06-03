@@ -8,25 +8,39 @@ App::App()
 {}
 
 bool App::init() {
-	
-    return true;
+
+    bool gpsOk = gpsService.init();
+    bool imuOk = imuService.init();
+    bool displayOk = displayService.init();
+
+    return gpsOk && imuOk && displayOk;
+
 }
 
 void App::update() {
-    // обновление датчиков
-    gpsService.update();
-    imuService.update();
+    uint32_t now = millis();
 
-    // получение доменных данных
-    GpsData gpsData = gpsService.get();
-    ImuData imuData = imuService.get();
+    // GPS
+    if (now - lastGpsUpdate >= 200) {
+        gpsService.update();
+        lastGpsUpdate = now;
+    }
 
-    // вычисления
-    navCore.update(gpsData, imuData);
+    // IMU
+    if (now - lastImuUpdate >= 20) {
+        imuService.update();
+        lastImuUpdate = now;
+    }
 
-    // итоговое состояние
-    const NavigationState& state = navCore.get();
+    navCore.update(
+        gpsService.get(),
+        imuService.get()
+    );
 
-    // вывод
-    displayService.update(state);
+    // Display
+    if (now - lastDisplayUpdate >= 200) {
+        displayService.update(navCore.get());
+        lastDisplayUpdate = now;
+    }
+
 }

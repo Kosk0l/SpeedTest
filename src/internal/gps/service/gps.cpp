@@ -35,3 +35,7 @@ bool gps::update() {
 GpsData gps::get() const {
     return lastValue;
 }
+
+bool gps::init() {
+    return driver->init();
+}

@@ -34,3 +34,7 @@ bool imu::update() {
 ImuData imu::get() {
     return lastValue;
 }
+
+bool imu::init() {
+    return driver->init();
+}
