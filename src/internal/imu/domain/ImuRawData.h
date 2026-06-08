@@ -7,5 +7,4 @@ struct ImuRawData {
     float mx, my, mz;
 
     uint32_t time;
-    bool valid;
 };

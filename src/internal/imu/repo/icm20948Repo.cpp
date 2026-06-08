@@ -20,9 +20,6 @@ bool Icm20948Repo::readRaw(ImuRawData& out) {
 
     icm.getEvent(&accel, &gyro, &temp, &mag);
 
-    // Валидация
-    out.valid = true;
-
     // Акселерометр
     out.ax = accel.acceleration.x;
     out.ay = accel.acceleration.y;

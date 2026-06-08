@@ -5,12 +5,7 @@ bool imu::update() {
     ImuData out{};
 
     // Вызов driver
-    if (!driver->readRaw(raw) || !raw.valid) {
-        return false;
-    }
-
-    // Валиданость raw
-    if (!raw.valid) {
+    if (!driver->readRaw(raw)) {
         return false;
     }
 
@@ -23,8 +18,11 @@ bool imu::update() {
     out.gy = raw.gy;
     out.gz = raw.gz;
 
+    out.mx = raw.mx;
+    out.my = raw.my;
+    out.mz = raw.mz;
+
     out.time = raw.time;
-    out.valid = true;
 
     // cache update
     lastValue = out;

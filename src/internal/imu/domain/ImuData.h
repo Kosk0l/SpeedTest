@@ -8,5 +8,4 @@ struct ImuData {
     float mx, my, mz; // Магнитное поле
 
     uint32_t time;
-    bool valid;
 };
