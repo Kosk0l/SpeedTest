@@ -7,14 +7,7 @@ bool gps::update() {
     GpsData out{};
 
     // Вызов driver
-    if (!driver || !driver->readRaw(raw))
-    {
-        return false;
-    }
-
-    // Валидность raw
-    if (!raw.valid)
-    {
+    if (!driver || !driver->readRaw(raw)) {
         return false;
     }
 
@@ -25,7 +18,6 @@ bool gps::update() {
     
     out.speed = raw.speed;
     out.time  = raw.time;
-    out.valid = true;
 
     // cache update
     lastValue = out;

@@ -8,13 +8,11 @@ App::App()
 {}
 
 bool App::init() {
-
     bool gpsOk = gpsService.init();
     bool imuOk = imuService.init();
     bool displayOk = displayService.init();
 
     return gpsOk && imuOk && displayOk;
-
 }
 
 void App::update() {
@@ -32,15 +30,12 @@ void App::update() {
         lastImuUpdate = now;
     }
 
-    navCore.update(
-        gpsService.get(),
-        imuService.get()
-    );
+    // Core
+    navCore.update(gpsService.get(), imuService.get());
 
     // Display
-    if (now - lastDisplayUpdate >= 200) {
+    if (now - lastDisplayUpdate >= 500) {
         displayService.update(navCore.get());
         lastDisplayUpdate = now;
     }
-
 }

@@ -8,6 +8,4 @@ struct GpsData {
 
     float speed; // м/с
     uint32_t time;
-
-    bool valid;
 };

@@ -43,3 +43,24 @@ bool Icm20948Repo::readRaw(ImuRawData& out) {
 
     return true;
 }
+
+// Serial.println("========== IMU ==========");
+    // Serial.print("ACC: ");
+    // Serial.print(out.ax);
+    // Serial.print(" ");
+    // Serial.print(out.ay);
+    // Serial.print(" ");
+    // Serial.println(out.az);
+    // Serial.print("GYR: ");
+    // Serial.print(out.gx);
+    // Serial.print(" ");
+    // Serial.print(out.gy);
+    // Serial.print(" ");
+    // Serial.println(out.gz);
+    // Serial.print("MAG: ");
+    // Serial.print(out.mx);
+    // Serial.print(" ");
+    // Serial.print(out.my);
+    // Serial.print(" ");
+    // Serial.println(out.mz);
+    // Serial.println("");

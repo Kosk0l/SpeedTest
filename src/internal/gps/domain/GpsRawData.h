@@ -8,6 +8,4 @@ struct GpsRawData {
 
     float speed;
     uint32_t time;
-
-    bool valid;
 };
