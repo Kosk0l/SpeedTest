@@ -26,13 +26,6 @@ bool SharpDisplayRepo::init() {
 void SharpDisplayRepo::render(const NavigationState& state) {
     display.clearDisplay();
 
-    if (!state.valid) {
-        display.setCursor(10, 30);
-        display.print("Waiting GPS...");
-        display.refresh();
-        return;
-    }
-
     display.setCursor(10, 20);
     display.print("DIST:");
     display.print(state.distance, 1);

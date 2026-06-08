@@ -2,97 +2,136 @@
 #include <Arduino.h>
 #include <math.h>
 
-NavCore::NavCore()
-    : prevGps{},
-    hasPrev(false),
-    startTime(0),
-    filteredSpeed(0.0f),
-    strokeCount(0)
-{
+NavCore::NavCore() {
+    x = y = 0;
+    vx = vy = 0;
+    P = 1.0f;
     state = {};
 }
 
-// Вычисление дистанции
-float distanceMeters(double lat1, double lon1, double lat2, double lon2) {
-    const double R = 6371000.0; // радиус Земли (м)
-
-    double dLat = (lat2 - lat1) * DEG_TO_RAD;
-    double dLon = (lon2 - lon1) * DEG_TO_RAD;
-
-    lat1 *= DEG_TO_RAD;
-    lat2 *= DEG_TO_RAD;
-
-    double a = sin(dLat / 2) * sin(dLat / 2) +
-               sin(dLon / 2) * sin(dLon / 2) *
-               cos(lat1) * cos(lat2);
-
-    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return R * c;
+float NavCore::deg2rad(float d) {
+    return d * 0.01745329251f;
 }
 
-// Основной метод обработки 
+// very rough local projection (good enough for small distances)
+void NavCore::gpsToXY(double lat, double lon, float& xOut, float& yOut) {
+    if (!originSet) {
+        lat0 = lat;
+        lon0 = lon;
+        originSet = true;
+    }
+
+    const float R = 6371000.0f;
+
+    float dLat = deg2rad(lat - lat0);
+    float dLon = deg2rad(lon - lon0);
+
+    xOut = R * dLon * cos(deg2rad(lat0));
+    yOut = R * dLat;
+}
+
+float NavCore::distance(float x1, float y1, float x2, float y2) {
+    float dx = x2 - x1;
+    float dy = y2 - y1;
+    return sqrtf(dx*dx + dy*dy);
+}
+
+bool NavCore::detectSpoof(const GpsData& gps, float jump, float speed) {
+    if (jump > 60.0f) return true;
+    if (speed > 12.0f) return true;
+    if (jump > 25.0f && speed < 0.2f) return true;
+    return false;
+}
+
 void NavCore::update(const GpsData& gps, const ImuData& imu) {
-    if (!gps.valid) {
-        state.valid = false;
-        return;
-    }
+    uint32_t now = millis();
 
-    uint32_t now = gps.time;
-
-    // Start
-    if (!hasPrev) {
-        prevGps = gps;
-        hasPrev = true;
+    if (startTime == 0) {
         startTime = now;
-
-        state.valid = true;
-        return;
+        lastTime = now;
     }
 
-    // Time total
+    float dt = (now - lastTime) / 1000.0f;
+    if (dt <= 0) dt = 0.01f;
+    lastTime = now;
+
     state.totalTime = now - startTime;
 
-    // Distation
-    float dist = distanceMeters(prevGps.lat, prevGps.lon, gps.lat, gps.lon);
-    if (dist > 1.0f && dist < 50.0f) { // защита от скачков 
-        state.distance += dist;
+    // IMU PREDICTION STEP
+    vx += imu.ax * dt;
+    vy += imu.ay * dt;
+
+    x += vx * dt;
+    y += vy * dt;
+
+    // damping (friction model)
+    vx *= 0.98f;
+    vy *= 0.98f;
+
+    // GPS MEASUREMENT STEP
+    bool gpsOk = gps.time > 0;
+
+    float gpsX = 0, gpsY = 0;
+    float jump = 0;
+
+    if (gpsOk) {
+        gpsToXY(gps.lat, gps.lon, gpsX, gpsY);
+
+        jump = distance(x, y, gpsX, gpsY);
+
+        bool spoof = detectSpoof(gps, jump, gps.speed);
+
+        if (spoof) {
+            gpsTrusted = false;
+            gpsBanUntil = now + 2000;
+        }
+
+        if (now > gpsBanUntil) {
+            gpsTrusted = true;
+        }
     }
 
-    // Speed 
-    float rawSpeed = gps.speed;
-    filteredSpeed = 0.2f * rawSpeed + 0.8f * filteredSpeed;
-    state.currentSpeed = filteredSpeed;
+    state.gpsValid = gpsOk;
+    state.gpsTrusted = gpsTrusted;
 
-    // avgRace
-    if (state.totalTime > 0) {
-        state.avgSpeed = state.distance / (state.totalTime / 1000.0f);
+    // FUSION (simple Kalman style)
+    if (gpsOk && gpsTrusted) {
+
+        // correction
+        x = 0.85f * x + 0.15f * gpsX;
+        y = 0.85f * y + 0.15f * gpsY;
+
+        // velocity correction
+        vx = 0.85f * vx + 0.15f * gps.speed;
     }
 
-    // pace 500
-    if (filteredSpeed > 0.1f) {
-        state.pace500 = 500.0f / filteredSpeed;
+    // OUTPUT METRICS
+    float dist = sqrtf(x*x + y*y);
+
+    state.distance = dist;
+    state.currentSpeed = sqrtf(vx*vx + vy*vy);
+
+    float t = state.totalTime / 1000.0f;
+    state.avgSpeed = (t > 0) ? dist / t : 0;
+
+    if (state.currentSpeed > 0.1f)
+        state.pace500 = 500.0f / state.currentSpeed;
+
+    // STROKES (IMU peak detect)
+    static bool stroke = false;
+
+    if (imu.az > 12.0f && !stroke) {
+        state.strokeCount++;
+        stroke = true;
     }
 
-    // Strocks
-    static bool strokeActive = false;
-
-    if (imu.az > 12.0f && !strokeActive) {
-        strokeCount++;
-        strokeActive = true;
+    if (imu.az < 9.5f) {
+        stroke = false;
     }
-
-    if (imu.az < 9.0f) {
-        strokeActive = false;
-    }
-
-    state.strokeCount = strokeCount;
 
     state.valid = true;
-    prevGps = gps;
 }
 
-// Получить данные
 const NavigationState& NavCore::get() const {
     return state;
 }
