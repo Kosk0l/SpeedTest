@@ -10,7 +10,7 @@ struct NavigationState {
     uint32_t totalTime;     // общее время (мс)
     uint32_t strokeCount;   // количество гребков
 
-    uint32_t worldTime;     // Время мировое
+    uint32_t utcTime;
 
     bool gpsValid;
     bool imuValid;

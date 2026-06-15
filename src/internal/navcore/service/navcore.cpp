@@ -5,10 +5,10 @@
 // ФИЗИЧЕСКИЕ КОНСТАНТЫ И ПОРОГИ:
 
 // Лимиты для академической гребли
-// Мировой рекорд одиночки ~5.5 м/с (20 км/ч), восьмёрки ~6.5 м/с
+// Мировой рекорд одиночки 5.5 м/с (20 км/ч), восьмёрки 6.5 м/с
 constexpr float MAX_ROWING_SPEED    = 7.0f;    // м/с — жёсткий потолок
 constexpr float MIN_SPEED_THRESHOLD = 0.15f;   // м/с — ниже считаем покой
-constexpr float GRAVITY             = 9.81f;   // м/с²
+constexpr float GRAVITY             = 9.81f;   // м/с2
 
 // GPS доверие
 constexpr float GPS_QUALITY_DECAY   = 0.98f;   // деградация качества/тик без GPS
@@ -16,10 +16,10 @@ constexpr float GPS_MAX_JUMP        = 25.0f;   // м — скачок позиц
 constexpr float GPS_SPEED_DEVIATION = 2.5f;    // м/с — расхождение с IMU
 
 // Детектор гребков (адаптивные пороги подстраиваются под ритм)
-constexpr float STROKE_THRESHOLD_HIGH = 11.5f; // м/с² — начало гребка (catch)
-constexpr float STROKE_THRESHOLD_LOW  = 9.8f;  // м/с² — конец гребка (recovery)
-constexpr uint32_t STROKE_MIN_INTERVAL = 700;  // мс (~85 гребков/мин максимум)
-constexpr uint32_t STROKE_MAX_INTERVAL = 3500; // мс (~17 гребков/мин минимум)
+constexpr float STROKE_THRESHOLD_HIGH = 11.5f; // м/с2 — начало гребка (catch)
+constexpr float STROKE_THRESHOLD_LOW  = 9.8f;  // м/с2 — конец гребка (recovery)
+constexpr uint32_t STROKE_MIN_INTERVAL = 700;  // мс (85 гребков/мин максимум)
+constexpr uint32_t STROKE_MAX_INTERVAL = 3500; // мс (17 гребков/мин минимум)
 
 // Режимы работы
 constexpr float GPS_QUALITY_EXCELLENT = 0.7f;
@@ -47,13 +47,12 @@ NavCore::NavCore() {
     state = {};
 }
 
-// ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ:
 
 float NavCore::deg2rad(float d) {
     return d * 0.01745329251f;
 }
 
-// Плоская проекция WGS84 → локальные XY (метод equirectangular approximation)
+// Плоская проекция WGS84 - локальные XY
 // Точность достаточна для дистанций < 5 км (дистанция гребли 2 км)
 void NavCore::gpsToXY(double lat, double lon, float& xOut, float& yOut) {
     if (!originSet) {
@@ -78,7 +77,6 @@ float NavCore::calcDistance(float x1, float y1, float x2, float y2) {
     return sqrtf(dx * dx + dy * dy);
 }
 
-// ОЦЕНКА КАЧЕСТВА GPS
 // Возвращает 0.0...1.0 на основе нескольких эвристик
 float NavCore::estimateGpsQuality(const GpsData& gps, float jump) {
     float q = 1.0f;
@@ -96,7 +94,7 @@ float NavCore::estimateGpsQuality(const GpsData& gps, float jump) {
     float imuSpeed = sqrtf(vx * vx + vy * vy);
     float speedDiff = fabsf(gps.speed - imuSpeed);
     if (speedDiff > GPS_SPEED_DEVIATION) {
-        q *= (GPS_SPEED_DEVIATION / speedDiff);  // чем больше расхождение, тем хуже
+        q *= (GPS_SPEED_DEVIATION / speedDiff); 
     }
 
     // 4. Резкий скачок позиции (спуффинг)
@@ -126,9 +124,9 @@ void NavCore::updateBias(const ImuData& imu, float dt) {
     }
 }
 
-// ДЕТЕКТОР ГРЕБКОВ
-// Используем гистерезис: высокий порог для старта, низкий для окончания.
-// Плюс проверка минимального интервала (защита от двойных срабатываний).
+// Детектор гребков
+// гистерезис: высокий порог для старта, низкий для окончания.
+// проверка минимального интервала (защита от двойных срабатываний).
 void NavCore::detectStroke(const ImuData& imu, uint32_t now) {
     float az = imu.az;
     uint32_t dt = now - lastStrokeTime;
@@ -145,7 +143,7 @@ void NavCore::detectStroke(const ImuData& imu, uint32_t now) {
         if (az < STROKE_THRESHOLD_LOW) {
             inStroke = false;
         }
-        // Защита от зависания: если гревок затянулся — сбрасываем
+        // Защита от зависания: если гребок затянулся — сброс
         if (dt > STROKE_MAX_INTERVAL) {
             inStroke = false;
         }
