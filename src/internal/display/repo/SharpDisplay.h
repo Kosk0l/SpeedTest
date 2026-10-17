@@ -10,7 +10,7 @@ private:
     Adafruit_SharpMem display;
 
     struct CachedState {
-        uint32_t utcTime = 0;
+        uint32_t utcMinute = UINT32_MAX;
         float distance = -1.0f;
         float pace500 = -1.0f;
         uint32_t totalTime = UINT32_MAX;
@@ -19,6 +19,7 @@ private:
         bool gpsValid = false;
         bool initialized = false;
         bool gpsTrusted = false;
+        int satellites = -1;
     } cached;
 
     // Координаты областей для частичного обновления
@@ -27,6 +28,7 @@ private:
     };
 
     Area areaUtc;
+    Area areaSats;
     Area areaDistance;
     Area areaPace;
     Area areaTime;

@@ -53,10 +53,13 @@ bool NeoM9NRepo::readRaw(GpsRawData& out) {
     out.velN  = gnss.getNedNorthVel() / 1000.0f;
     out.velE  = gnss.getNedEastVel() / 1000.0f;
     out.sAcc  = gnss.getSpeedAccEst() / 1000.0f;       // мм/с -> м/с
-    out.hAcc  = gnss.getHorizontalAccEst() / 1000.0f;  // мм -> м
+    // В PVT hAcc беззнаковый, библиотека отдаёт int32: без фикса 0xFFFFFFFF стал бы −1 мм
+    out.hAcc  = (uint32_t)gnss.getHorizontalAccEst() / 1000.0f;  // мм -> м
     out.pDop  = gnss.getPDOP() / 100.0f;
 
-    bool timeValid = gnss.getDateValid() && gnss.getTimeValid();
+    // getUnixEpoch() берёт дни из таблицы на 2020–2099 годы без проверки границ
+    uint16_t year = gnss.getYear();
+    bool timeValid = gnss.getDateValid() && gnss.getTimeValid() && year >= 2020 && year <= 2099;
     out.unixTime = timeValid ? gnss.getUnixEpoch() : 0;
 
     out.time = millis();

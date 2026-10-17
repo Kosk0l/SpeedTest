@@ -490,6 +490,7 @@ void NavCore::update(const GpsData& gps, const ImuData& imu) {
 
     // Статусы
     bool gpsFresh = gps.time != 0 && now - gps.time < GPS_TIMEOUT_MS;
+    if (!gpsFresh) state.satellites = 0;  // пакеты не идут — не показываем устаревшее
     state.gpsValid   = gpsFresh && gps.fixOk;
     state.gpsTrusted = gpsTrusted;
     state.imuValid   = imuInitialized && now - lastImuStamp < IMU_TIMEOUT_MS;

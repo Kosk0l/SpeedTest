@@ -2,6 +2,9 @@
 #include <Arduino.h>
 #include <stdio.h>
 
+// Часовой пояс для часов на экране: UTC+3 (Москва)
+constexpr uint32_t TIMEZONE_OFFSET_SEC = 3 * 3600;
+
 SharpDisplayRepo::SharpDisplayRepo()
     : display(18, 23, 5, 400, 240)
 {}
@@ -15,6 +18,7 @@ bool SharpDisplayRepo::init() {
     // Формат: {x, y_значения, width, height}
     
     areaUtc       = {10,  10, 120, 20};   // Верхний бар
+    areaSats      = {290, 10, 100, 20};   // Верхний бар справа: спутники
     areaDistance  = {10,  65, 230, 50};   // Дистанция 
     areaPace      = {240, 70, 150, 45};   // Темп 
     
@@ -84,8 +88,8 @@ void SharpDisplayRepo::formatUtcTime(char* buf, uint32_t unixTime) {
         return;
     }
 
-    unixTime += 10800; 
-    
+    unixTime += TIMEZONE_OFFSET_SEC;
+
     uint32_t totalSeconds = unixTime % 86400;
     int hours = totalSeconds / 3600;
     int minutes = (totalSeconds % 3600) / 60;
@@ -104,21 +108,36 @@ void SharpDisplayRepo::updateDynamic(const NavigationState& state) {
     bool changed = false;
     char buf[16];
 
-    // 1. Мировое время 
+    // 1. Мировое время
     uint32_t currentMinute = state.utcTime / 60;
-    static uint32_t lastMinute = UINT32_MAX;
-    if (currentMinute != lastMinute) {
+    if (currentMinute != cached.utcMinute) {
         clearArea(areaUtc);
         display.setTextSize(2);
         display.setTextColor(0);
         display.setCursor(areaUtc.x, areaUtc.y);
         formatUtcTime(buf, state.utcTime);
         display.print(buf);
-        lastMinute = currentMinute;
+        cached.utcMinute = currentMinute;
         changed = true;
     }
 
-    // 2. Дистанция 
+    // 1.1 Спутники — по правому краю верхнего бара
+    if (state.satellites != cached.satellites) {
+        clearArea(areaSats);
+        display.setTextSize(2);
+        display.setTextColor(0);
+        sprintf(buf, "SAT: %u", state.satellites);
+
+        int16_t x1, y1;
+        uint16_t w, h;
+        display.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+        display.setCursor(areaSats.x + areaSats.w - w, areaSats.y);
+        display.print(buf);
+        cached.satellites = state.satellites;
+        changed = true;
+    }
+
+    // 2. Дистанция
     if (abs(state.distance - cached.distance) > 0.1f) {
         clearArea(areaDistance);
         display.setTextSize(6);

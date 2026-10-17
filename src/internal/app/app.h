@@ -22,6 +22,7 @@ private:
     // Sheduler
     uint32_t lastImuUpdate = 0;
     uint32_t lastDisplayUpdate = 0;
+    uint32_t lastDebugPrint = 0;
 public:
     App();
 
