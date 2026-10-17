@@ -5,46 +5,103 @@
 #include "internal/imu/domain/ImuData.h"
 #include "internal/navcore/domain/NavigationState.h"
 
+// Дистанция и скорость — только по GPS (доплеровская скорость приёмника).
+// IMU — только детектор гребков.
 class NavCore {
 private:
     NavigationState state;
 
-    // Локальная система координат (ENU) 
-    float x = 0.0f, y = 0.0f;       // позиция (м)
-    float vx = 0.0f, vy = 0.0f;     // скорость (м/с)
-
-    // Компенсация дрейфа IMU 
-    float axBias = 0.0f, ayBias = 0.0f;  // bias акселерометра
-
-    // GPS проекция 
-    double lat0 = 0.0, lon0 = 0.0;
-    bool originSet = false;
-
-    // Тайминг 
+    // Тайминг
+    bool started = false;
     uint32_t startTime = 0;
-    uint32_t lastTime = 0;
-    uint32_t lastGpsTime = 0;
 
-    // Адаптивное доверие к GPS (0.0 — полное недоверие, 1.0 — полное доверие) 
-    float gpsQuality = 0.0f;
+    // ================= GPS: дистанция и скорость =================
 
-    // Детектор гребков 
-    bool inStroke = false;
-    uint32_t lastStrokeTime = 0;
+    uint32_t lastGpsStamp = 0;      // gps.time последнего обработанного пакета
+    uint32_t lastGoodFixTime = 0;   // millis() последнего годного фикса
 
-    // Вспомогательные методы 
-    float deg2rad(float d);
-    void gpsToXY(double lat, double lon, float& xOut, float& yOut);
-    float calcDistance(float x1, float y1, float x2, float y2);
-    float estimateGpsQuality(const GpsData& gps, float jump);
-    void updateBias(const ImuData& imu, float dt);
-    void detectStroke(const ImuData& imu, uint32_t now);
+    // Доверие к GPS с гистерезисом
+    bool gpsTrusted = false;
+    uint8_t goodFixStreak = 0;
+    uint8_t badFixStreak = 0;
+
+    // Последний фикс, учтённый в дистанции (опорная точка)
+    bool hasLastFix = false;
+    double lastLat = 0.0, lastLon = 0.0;
+    float lastHAcc = 0.0f;
+    uint32_t lastITow = 0;
+
+    // Детектор движения: последние фиксы для усреднения вектора скорости
+    struct MotionSample {
+        uint16_t dtMs;
+        float step;           // путь за шаг (м)
+        float velN, velE;     // вектор скорости (м/с)
+    };
+    static constexpr uint8_t MOTION_RING_SIZE = 32;  // окно 2 с влезает и при 10+ Гц
+    MotionSample motionRing[MOTION_RING_SIZE] = {};
+    uint8_t motionHead = 0;
+    uint8_t motionCount = 0;
+    bool moving = false;
+    float lastAlongSpeed = 0.0f;    // скорость вдоль курса на прошлой эпохе (м/с)
+    float restNoiseVar = 0.0f;      // средний квадрат скорости на стоянке (м2/с2)
+
+    // Предварительный старт: путь копится отдельно, пока координаты не подтвердят смещение
+    bool provisional = false;
+    double provisionalLat = 0.0, provisionalLon = 0.0;
+    float provisionalHAcc = 0.0f;
+    double provisionalDistance = 0.0;
+    uint32_t provisionalMs = 0;
+    double provisionalN = 0.0, provisionalE = 0.0;  // смещение по интегралу скорости (м)
+
+    double totalDistance = 0.0;
+    uint32_t movingTimeMs = 0;
+    float smoothedSpeed = 0.0f;
+
+    // Время UTC с GPS
+    uint32_t unixBase = 0;
+    uint32_t unixBaseMillis = 0;
+
+    // ================= IMU: гребки =================
+
+    uint32_t lastImuStamp = 0;
+    bool imuInitialized = false;
+    uint32_t imuStartTime = 0;
+    uint16_t imuSamples = 0;
+
+    float gravX = 0.0f, gravY = 0.0f, gravZ = 0.0f;   // оценка вектора гравитации
+    float cov[6] = {0};                               // ковариация горизонтального ускорения: xx xy xz yy yz zz
+    float axisX = 1.0f, axisY = 0.0f, axisZ = 0.0f;   // продольная ось лодки (главная компонента)
+    float surge = 0.0f;                               // продольное ускорение, сглаженное
+    float surgePeak = 0.0f;                           // огибающая амплитуды
+
+    bool strokeHigh = false;
+    uint32_t lastDetectTime = 0;    // последний сработавший детектор (защита от двойных)
+    uint32_t lastStrokeTime = 0;    // последний засчитанный гребок
+    float strokeRate = 0.0f;
+
+    // Гребки, пойманные на стоянке: ждут подтверждения стартом по GPS
+    static constexpr uint8_t MAX_PENDING_STROKES = 8;
+    uint32_t pendingStrokes[MAX_PENDING_STROKES] = {0};
+    uint8_t pendingStrokeCount = 0;
+
+    // Вспомогательные методы
+    void processGps(const GpsData& gps, uint32_t now);
+    bool isFixGood(const GpsData& gps) const;
+    void rememberFix(const GpsData& gps);
+    void updateMotion(const GpsData& gps, uint32_t dtMs);
+    void processImu(const ImuData& imu);
+    void onStrokeDetected(uint32_t t);
+    void countStroke(uint32_t t);
+    void updatePendingStrokes(uint32_t now);
+    static void offsetNE(double lat1, double lon1, double lat2, double lon2, double& north, double& east);
+    static double distanceBetween(double lat1, double lon1, double lat2, double lon2);
 
 public:
     // Constructor
     NavCore();
-    
-    // main method - calculation 
+
+    // main method - calculation
+    // Можно вызывать на каждом loop(): новые пакеты определяются по меткам времени
     void update(const GpsData& gps, const ImuData& imu);
     // Return state
     const NavigationState& get() const;

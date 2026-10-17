@@ -2,323 +2,499 @@
 #include <Arduino.h>
 #include <math.h>
 
-// ФИЗИЧЕСКИЕ КОНСТАНТЫ И ПОРОГИ:
+// ============================================================================
+// ФИЗИЧЕСКИЕ КОНСТАНТЫ И ПОРОГИ
+// ============================================================================
 
 // Лимиты для академической гребли
-// Мировой рекорд одиночки 5.5 м/с (20 км/ч), восьмёрки 6.5 м/с
-constexpr float MAX_ROWING_SPEED    = 7.0f;    // м/с — жёсткий потолок
-constexpr float MIN_SPEED_THRESHOLD = 0.15f;   // м/с — ниже считаем покой
-constexpr float GRAVITY             = 9.81f;   // м/с2
+constexpr float MAX_ROWING_SPEED = 7.0f;    // м/с — быстрее лодка не ходит
+constexpr float GPS_MAX_SPEED    = 10.5f;   // м/с — выше считаем выбросом GPS
 
-// GPS доверие
-constexpr float GPS_QUALITY_DECAY   = 0.98f;   // деградация качества/тик без GPS
-constexpr float GPS_MAX_JUMP        = 25.0f;   // м — скачок позиции = спуффинг
-constexpr float GPS_SPEED_DEVIATION = 2.5f;    // м/с — расхождение с IMU
+// Качество фикса. Войти в доверие строже, чем остаться в нём (гистерезис)
+constexpr float   GPS_HACC_ENTER = 5.0f;    // м
+constexpr float   GPS_HACC_STAY  = 8.0f;    // м
+constexpr float   GPS_SACC_ENTER = 0.6f;    // м/с
+constexpr float   GPS_SACC_STAY  = 1.0f;    // м/с
+constexpr uint8_t GPS_SATS_ENTER = 6;
+constexpr uint8_t GPS_SATS_STAY  = 5;
+constexpr uint8_t GPS_TRUST_ENTER_FIXES = 5;   // годных фиксов подряд (1 с при 5 Гц)
+constexpr uint8_t GPS_TRUST_EXIT_FIXES  = 3;   // плохих фиксов подряд
+constexpr uint32_t GPS_TIMEOUT_MS       = 2000; // нет годных фиксов — GPS потерян
 
-// Детектор гребков (адаптивные пороги подстраиваются под ритм)
-constexpr float STROKE_THRESHOLD_HIGH = 11.5f; // м/с2 — начало гребка (catch)
-constexpr float STROKE_THRESHOLD_LOW  = 9.8f;  // м/с2 — конец гребка (recovery)
-constexpr uint32_t STROKE_MIN_INTERVAL = 700;  // мс (85 гребков/мин максимум)
-constexpr uint32_t STROKE_MAX_INTERVAL = 3500; // мс (17 гребков/мин минимум)
+// Накопление дистанции
+constexpr uint32_t GPS_WEEK_MS                = 604800000;
+constexpr uint32_t GPS_MAX_INTEGRATION_GAP_MS = 3000;    // до этого разрыва интегрируем скорость
+constexpr uint32_t GPS_MAX_BRIDGE_MS          = 300000;  // до этого — мостим хордой по координатам
+constexpr float    GPS_GAP_NOISE_FACTOR       = 2.0f;    // хорда меньше 2*(hAcc1+hAcc2) — шум позиции
 
-// Режимы работы
-constexpr float GPS_QUALITY_EXCELLENT = 0.7f;
-constexpr float GPS_QUALITY_POOR      = 0.3f;
-constexpr float GPS_QUALITY_DEAD      = 0.1f;   // ниже этого — GPS полностью игнорируем
+// Детектор движения по доплеровской скорости
+constexpr uint32_t MOTION_WINDOW_MS = 2000;    // окно усреднения вектора скорости
+constexpr float    MOVE_START_SPEED = 1.0f;    // м/с — снос течением и шум ниже этого
+constexpr float    MOVE_SACC_FACTOR = 2.0f;    // и не ниже 2*sAcc
+constexpr float    MOVE_NOISE_FACTOR = 2.5f;   // и не ниже 2.5*RMS шума скорости на стоянке
+constexpr float    REST_NOISE_TAU    = 20.0f;  // с — усреднение шума скорости на стоянке
+constexpr float    MOVE_STOP_SPEED  = 0.5f;    // м/с
+constexpr float    MOVE_MIN_DISPLACEMENT    = 10.0f;  // м — старт подтверждается смещением координат
+constexpr float    MOVE_DISPLACEMENT_FACTOR = 1.5f;   // и не меньше 1.5*(hAcc1+hAcc2)
+constexpr float    MOVE_MATCH_MIN           = 5.0f;   // м — допустимое расхождение смещений по координатам и по скорости
+constexpr float    MOVE_MATCH_RATIO         = 0.2f;   // плюс доля от пройденного
+constexpr uint32_t MOVE_CONFIRM_TIMEOUT_MS  = 20000;  // не подтвердилось — это был шум скорости
 
-// Damping в зависимости от режима
-constexpr float DAMPING_EXCELLENT = 0.999f;  // почти не давим
-constexpr float DAMPING_POOR      = 0.95f;   // среднее подавление
-constexpr float DAMPING_DEAD      = 0.85f;   // жёсткое подавление
+// Вывод скорости
+constexpr float SPEED_SMOOTH_TAU = 2.0f;       // с — сглаживание колебаний скорости внутри гребка
+constexpr float MIN_PACE_SPEED   = 1.0f;       // м/с — медленнее темп не показываем (8:20)
 
-// ZUPT пороги
-constexpr float ZUPT_ACCEL_THRESHOLD_GOOD = 0.6f;   // когда GPS есть
-constexpr float ZUPT_ACCEL_THRESHOLD_DEAD = 1.2f;   // когда GPS нет — более агрессивный
-constexpr float ZUPT_VELOCITY_THRESHOLD  = 0.08f;   // м/с — ниже этого обнуляем
+// Детектор гребков
+constexpr float    GRAVITY_TAU            = 4.0f;    // с — ФНЧ гравитации (период гребка 1–3.5 с)
+constexpr float    AXIS_TAU               = 5.0f;    // с — усреднение ковариации для оси лодки
+constexpr float    SURGE_TAU              = 0.05f;   // с — сглаживание вибраций (~3 Гц)
+constexpr float    PEAK_DECAY_TAU         = 3.0f;    // с — спад огибающей амплитуды
+constexpr float    STROKE_MIN_ACCEL       = 0.8f;    // м/с2 — порог не ниже этого (шум, качка)
+constexpr float    STROKE_THRESHOLD_RATIO = 0.35f;   // порог — доля от огибающей
+constexpr uint32_t STROKE_MIN_INTERVAL_MS = 1000;    // 60 гребков/мин максимум
+constexpr uint32_t STROKE_MAX_INTERVAL_MS = 6000;    // 10 гребков/мин — реже темп сбрасываем
+constexpr float    STROKE_RATE_ALPHA      = 0.4f;    // сглаживание темпа
+constexpr uint32_t STROKE_PENDING_WINDOW_MS = 15000; // гребок на стоянке ждёт подтверждения стартом
+constexpr float    IMU_MAX_DT             = 0.1f;    // с — ограничение шага при пропусках
+constexpr uint32_t IMU_TIMEOUT_MS         = 500;
+constexpr uint32_t IMU_WARMUP_MS          = 2000;    // после включения фильтры устаиваются
 
-// Bias калибровка
-constexpr float BIAS_ALPHA_FAST   = 0.05f;  // когда GPS нет
-constexpr float BIAS_ALPHA_SLOW   = 0.01f;  // когда GPS есть
-
-// Velocity clamping — если скорость очень мала и нет GPS, обнуляем
-constexpr float VELOCITY_CLAMP_THRESHOLD = 0.05f;  // м/с
 
 NavCore::NavCore() {
     state = {};
 }
 
+void NavCore::offsetNE(double lat1, double lon1, double lat2, double lon2, double& north, double& east) {
+    // Равнопромежуточная проекция: на дистанциях гребли погрешность — миллиметры.
+    // Считаем в double: float на широте 55° даёт шаг ~0.4 м
+    const double R = 6371000.0;
+    const double DEG = M_PI / 180.0;
 
-float NavCore::deg2rad(float d) {
-    return d * 0.01745329251f;
+    north = R * (lat2 - lat1) * DEG;
+    east  = R * (lon2 - lon1) * DEG * cos(0.5 * (lat1 + lat2) * DEG);
 }
 
-// Плоская проекция WGS84 - локальные XY
-// Точность достаточна для дистанций < 5 км (дистанция гребли 2 км)
-void NavCore::gpsToXY(double lat, double lon, float& xOut, float& yOut) {
-    if (!originSet) {
-        lat0 = lat;
-        lon0 = lon;
-        originSet = true;
-        xOut = yOut = 0.0f;
+double NavCore::distanceBetween(double lat1, double lon1, double lat2, double lon2) {
+    double north, east;
+    offsetNE(lat1, lon1, lat2, lon2, north, east);
+    return sqrt(north * north + east * east);
+}
+
+
+// ============================================================================
+// GPS: ДИСТАНЦИЯ И СКОРОСТЬ
+// ============================================================================
+
+bool NavCore::isFixGood(const GpsData& gps) const {
+    if (!gps.fixOk) return false;
+    if (gps.fixType != 3 && gps.fixType != 4) return false;  // только 3D (и GNSS+DR)
+    if (gps.lat == 0.0 && gps.lon == 0.0) return false;
+    if (gps.speed < 0.0f || gps.speed > GPS_MAX_SPEED) return false;
+
+    // Если GPS уже в доверии — пороги мягче, чтобы не мигать на границе
+    float maxHAcc   = gpsTrusted ? GPS_HACC_STAY : GPS_HACC_ENTER;
+    float maxSAcc   = gpsTrusted ? GPS_SACC_STAY : GPS_SACC_ENTER;
+    uint8_t minSats = gpsTrusted ? GPS_SATS_STAY : GPS_SATS_ENTER;
+
+    return gps.hAcc <= maxHAcc && gps.sAcc <= maxSAcc && gps.satellites >= minSats;
+}
+
+void NavCore::rememberFix(const GpsData& gps) {
+    hasLastFix = true;
+    lastLat   = gps.lat;
+    lastLon   = gps.lon;
+    lastHAcc  = gps.hAcc;
+    lastITow  = gps.iTow;
+}
+
+void NavCore::updateMotion(const GpsData& gps, uint32_t dtMs) {
+    uint8_t current = motionHead;
+    motionRing[current] = { (uint16_t)dtMs, 0.0f, gps.velN, gps.velE };
+    motionHead = (motionHead + 1) % MOTION_RING_SIZE;
+    if (motionCount < MOTION_RING_SIZE) motionCount++;
+
+    // Средний вектор скорости за окно. На стоянке шум смотрит в случайные стороны
+    // и гасится, в движении — складывается. По модулю скорости так нельзя:
+    // его шум всегда в плюс, и стоящая лодка «едет»
+    uint32_t windowMs = 0;
+    float sumN = 0.0f, sumE = 0.0f;
+    double windowStep = 0.0;
+    for (uint8_t i = 0; i < motionCount && windowMs < MOTION_WINDOW_MS; i++) {
+        const MotionSample& m = motionRing[(motionHead + MOTION_RING_SIZE - 1 - i) % MOTION_RING_SIZE];
+        windowMs   += m.dtMs;
+        sumN       += m.velN * m.dtMs;
+        sumE       += m.velE * m.dtMs;
+        windowStep += m.step;
+    }
+    bool windowFull = windowMs >= MOTION_WINDOW_MS;
+    float sumNorm = sqrtf(sumN * sumN + sumE * sumE);
+    float coherentSpeed = (windowMs > 0) ? sumNorm / windowMs : 0.0f;
+
+    // Скорость вдоль курса — проекция на средний вектор: поперечный шум её не завышает
+    float alongSpeed = (sumNorm > 1e-6f) ? (gps.velN * sumN + gps.velE * sumE) / sumNorm : 0.0f;
+    alongSpeed = fminf(fmaxf(alongSpeed, 0.0f), MAX_ROWING_SPEED);
+
+    // Трапеция между эпохами
+    double step = 0.5 * (lastAlongSpeed + alongSpeed) * (dtMs / 1000.0);
+    lastAlongSpeed = alongSpeed;
+    motionRing[current].step = (float)step;
+    windowStep += step;
+
+    float dt = dtMs / 1000.0f;
+
+    if (!moving && !provisional) {
+        // Шум скорости, который реально видим на стоянке: приёмник может занижать sAcc.
+        // Только когда окно явно говорит «стоим» — иначе разгон поднимет порог старта
+        if (windowFull && coherentSpeed < MOVE_STOP_SPEED) {
+            restNoiseVar += (dt / (REST_NOISE_TAU + dt)) * (gps.velN * gps.velN + gps.velE * gps.velE - restNoiseVar);
+        }
+
+        float startSpeed = fmaxf(MOVE_START_SPEED,
+                           fmaxf(MOVE_SACC_FACTOR * gps.sAcc, MOVE_NOISE_FACTOR * sqrtf(restNoiseVar)));
+        if (windowFull && coherentSpeed > startSpeed) {
+            // Предварительный старт: путь из окна — это разгон, но засчитаем его,
+            // только когда координаты подтвердят смещение
+            provisional = true;
+            provisionalLat  = gps.lat;
+            provisionalLon  = gps.lon;
+            provisionalHAcc = gps.hAcc;
+            provisionalDistance = windowStep;
+            provisionalMs   = windowMs;
+            provisionalN = provisionalE = 0.0;
+            smoothedSpeed   = alongSpeed;
+            motionCount = 0;  // окно учтено, дальше копим заново
+        }
         return;
     }
 
-    const float R = 6371000.0f;
-    float dLat = deg2rad((float)(lat - lat0));
-    float dLon = deg2rad((float)(lon - lon0));
-
-    xOut = R * dLon * cosf(deg2rad((float)lat0));
-    yOut = R * dLat;
-}
-
-float NavCore::calcDistance(float x1, float y1, float x2, float y2) {
-    float dx = x2 - x1;
-    float dy = y2 - y1;
-    return sqrtf(dx * dx + dy * dy);
-}
-
-// Возвращает 0.0...1.0 на основе нескольких эвристик
-float NavCore::estimateGpsQuality(const GpsData& gps, float jump) {
-    float q = 1.0f;
-
-    // 1. Валидность данных
-    if (gps.time == 0) return 0.0f;
-    if (gps.lat == 0.0 && gps.lon == 0.0) return 0.0f;
-
-    // 2. Физическая невозможная скорость
-    if (gps.speed < 0.0f || gps.speed > MAX_ROWING_SPEED * 1.5f) {
-        q *= 0.05f;
+    if (windowFull && coherentSpeed < MOVE_STOP_SPEED) {
+        // Остановка. Если старт так и не подтвердился — путь был шумом, он не засчитан
+        moving = false;
+        provisional = false;
+        smoothedSpeed = 0.0f;
+        motionCount = 0;
+        return;
     }
 
-    // 3. Расхождение скорости GPS с оценкой IMU
-    float imuSpeed = sqrtf(vx * vx + vy * vy);
-    float speedDiff = fabsf(gps.speed - imuSpeed);
-    if (speedDiff > GPS_SPEED_DEVIATION) {
-        q *= (GPS_SPEED_DEVIATION / speedDiff); 
-    }
+    smoothedSpeed += (dt / (SPEED_SMOOTH_TAU + dt)) * (alongSpeed - smoothedSpeed);
 
-    // 4. Резкий скачок позиции (спуффинг)
-    if (jump > GPS_MAX_JUMP) {
-        q *= 0.05f;
-    } else if (jump > GPS_MAX_JUMP * 0.5f) {
-        q *= 0.5f;
-    }
+    if (provisional) {
+        provisionalDistance += step;
+        provisionalMs       += dtMs;
+        provisionalN        += gps.velN * dt;   // смещение, проинтегрированное из скорости
+        provisionalE        += gps.velE * dt;
 
-    // Ограничиваем диапазон
-    if (q < 0.0f) q = 0.0f;
-    if (q > 1.0f) q = 1.0f;
+        // Гребля уводит координаты на десятки метров, и туда же, куда показывает скорость.
+        // Шум скорости и дрейф координат так не согласуются
+        double north, east;
+        offsetNE(provisionalLat, provisionalLon, gps.lat, gps.lon, north, east);
+        double moved   = sqrt(north * north + east * east);
+        double needed  = fmax(MOVE_MIN_DISPLACEMENT, MOVE_DISPLACEMENT_FACTOR * (provisionalHAcc + gps.hAcc));
+        double integrated = sqrt(provisionalN * provisionalN + provisionalE * provisionalE);
+        double mismatch = sqrt((north - provisionalN) * (north - provisionalN) + (east - provisionalE) * (east - provisionalE));
+        double allowed  = fmax(MOVE_MATCH_MIN, provisionalHAcc + gps.hAcc) + MOVE_MATCH_RATIO * integrated;
 
-    return q;
-}
-
-// ОНЛАЙН-КАЛИБРОВКА BIAS АКСЕЛЕРОМЕТРА
-// Когда лодка неподвижна, среднее ускорение = bias. Накапливаем его.
-void NavCore::updateBias(const ImuData& imu, float dt) {
-    float speed = sqrtf(vx * vx + vy * vy);
-
-    // Обновляем bias только в покое и без доверия к GPS
-    if (speed < MIN_SPEED_THRESHOLD && gpsQuality < 0.3f && !inStroke) {
-        const float alpha = 0.01f;  // очень медленная адаптация (~1% за тик)
-        axBias = axBias * (1.0f - alpha) + imu.ax * alpha;
-        ayBias = ayBias * (1.0f - alpha) + imu.ay * alpha;
-    }
-}
-
-// Детектор гребков
-// гистерезис: высокий порог для старта, низкий для окончания.
-// проверка минимального интервала (защита от двойных срабатываний).
-void NavCore::detectStroke(const ImuData& imu, uint32_t now) {
-    float az = imu.az;
-    uint32_t dt = now - lastStrokeTime;
-
-    if (!inStroke) {
-        // Начало гребка: вертикальный импульс + защита от повторного срабатывания
-        if (az > STROKE_THRESHOLD_HIGH && dt > STROKE_MIN_INTERVAL) {
-            inStroke = true;
-            state.strokeCount++;
-            lastStrokeTime = now;
+        if (moved >= needed && mismatch <= allowed) {
+            moving = true;
+            provisional = false;
+            totalDistance += provisionalDistance;
+            movingTimeMs  += provisionalMs;
+        } else if (provisionalMs > MOVE_CONFIRM_TIMEOUT_MS) {
+            provisional = false;
+            smoothedSpeed = 0.0f;
+            motionCount = 0;
         }
+        return;
+    }
+
+    totalDistance += step;
+    movingTimeMs  += dtMs;
+}
+
+void NavCore::processGps(const GpsData& gps, uint32_t now) {
+    state.satellites = gps.satellites;
+    state.hAcc = gps.hAcc;
+    if (gps.unixTime != 0) {
+        unixBase = gps.unixTime;
+        unixBaseMillis = gps.time;
+    }
+
+    // 1. Качество фикса
+    if (!isFixGood(gps)) {
+        goodFixStreak = 0;
+        if (badFixStreak < 255) badFixStreak++;
+        if (gpsTrusted && badFixStreak >= GPS_TRUST_EXIT_FIXES) {
+            gpsTrusted = false;
+        }
+        // Плохой фикс не трогает ни дистанцию, ни опорную точку
+        return;
+    }
+
+    badFixStreak = 0;
+    if (goodFixStreak < 255) goodFixStreak++;
+    lastGoodFixTime = now;
+
+    if (!gpsTrusted) {
+        // Прогрев: первые фиксы после потери сигнала прыгают
+        if (goodFixStreak < GPS_TRUST_ENTER_FIXES) return;
+        gpsTrusted = true;
+    }
+
+    // 2. Первый фикс — только опорная точка
+    if (!hasLastFix) {
+        rememberFix(gps);
+        return;
+    }
+
+    // Время между эпохами по часам приёмника (с переходом через конец недели)
+    uint32_t dtMs = (gps.iTow + GPS_WEEK_MS - lastITow) % GPS_WEEK_MS;
+    if (dtMs == 0) return;  // та же эпоха
+
+    float speed = fminf(gps.speed, MAX_ROWING_SPEED);
+
+    if (dtMs <= GPS_MAX_INTEGRATION_GAP_MS) {
+        // 3. Интегрируем доплеровскую скорость.
+        //    Шум координат на дистанцию не влияет — в этом весь смысл
+        updateMotion(gps, dtMs);
+    } else if (dtMs <= GPS_MAX_BRIDGE_MS) {
+        // 4. Долгий провал сигнала: что было в нём, неизвестно,
+        //    надёжно только смещение между опорной и текущей точкой
+        //    Стояли до провала и стоим после — прыжок координат при захвате спутников не путь
+        double chord = distanceBetween(lastLat, lastLon, gps.lat, gps.lon);
+        double noise = GPS_GAP_NOISE_FACTOR * (lastHAcc + gps.hAcc);
+        double maxStep = MAX_ROWING_SPEED * (dtMs / 1000.0);
+        bool wasMoving = moving || provisional || speed >= MOVE_START_SPEED;
+        bool displaced = wasMoving && chord > noise && chord <= maxStep;
+
+        if (displaced) {
+            totalDistance += chord;
+            movingTimeMs  += dtMs;
+            if (provisional) {
+                totalDistance += provisionalDistance;
+                movingTimeMs  += provisionalMs;
+            }
+        }
+        moving = (moving || displaced) && speed >= MOVE_STOP_SPEED;
+        provisional = false;
+        smoothedSpeed = moving ? speed : 0.0f;
+        lastAlongSpeed = smoothedSpeed;
+        motionCount = 0;  // скорости до провала устарели
     } else {
-        // Конец гребка: фаза возврата (лодка выравнивается)
-        if (az < STROKE_THRESHOLD_LOW) {
-            inStroke = false;
+        // 5. Слишком долго без сигнала — начинаем с новой опорной точки
+        moving = false;
+        provisional = false;
+        smoothedSpeed = 0.0f;
+        lastAlongSpeed = 0.0f;
+        motionCount = 0;
+    }
+
+    rememberFix(gps);
+}
+
+
+// ============================================================================
+// IMU: ГРЕБКИ
+// ============================================================================
+
+void NavCore::processImu(const ImuData& imu) {
+    uint32_t prevStamp = lastImuStamp;
+    lastImuStamp = imu.time;
+
+    float gNorm;
+    if (!imuInitialized) {
+        gNorm = sqrtf(imu.ax * imu.ax + imu.ay * imu.ay + imu.az * imu.az);
+        if (gNorm < 1.0f) return;  // мусор с датчика
+
+        gravX = imu.ax;
+        gravY = imu.ay;
+        gravZ = imu.az;
+        imuSamples = 1;
+        imuStartTime = imu.time;
+
+        // Начальная ось — горизонтальная проекция той оси датчика,
+        // что меньше всего смотрит вдоль гравитации
+        float ux = gravX / gNorm, uy = gravY / gNorm, uz = gravZ / gNorm;
+        float ex = 0.0f, ey = 0.0f, ez = 0.0f;
+        if (fabsf(ux) <= fabsf(uy) && fabsf(ux) <= fabsf(uz)) ex = 1.0f;
+        else if (fabsf(uy) <= fabsf(uz)) ey = 1.0f;
+        else ez = 1.0f;
+        float ev = ex * ux + ey * uy + ez * uz;
+        ex -= ev * ux; ey -= ev * uy; ez -= ev * uz;
+        float eNorm = sqrtf(ex * ex + ey * ey + ez * ez);
+        axisX = ex / eNorm; axisY = ey / eNorm; axisZ = ez / eNorm;
+
+        imuInitialized = true;
+        return;
+    }
+
+    float dt = (imu.time - prevStamp) / 1000.0f;
+    if (dt <= 0.0f) return;
+    if (dt > IMU_MAX_DT) dt = IMU_MAX_DT;
+
+    // 1. Гравитация — медленный ФНЧ. Всё, что быстрее, — динамика лодки.
+    //    Гироскоп не используем: крен на частоте гребка мал, а дрейф нуля — лишняя ошибка.
+    //    Первые сэмплы усредняем накопительно, чтобы не стартовать с одного шумного
+    if (imuSamples < 65535) imuSamples++;
+    float kG = fmaxf(dt / (GRAVITY_TAU + dt), 1.0f / imuSamples);
+    gravX += kG * (imu.ax - gravX);
+    gravY += kG * (imu.ay - gravY);
+    gravZ += kG * (imu.az - gravZ);
+
+    gNorm = sqrtf(gravX * gravX + gravY * gravY + gravZ * gravZ);
+    if (gNorm < 1.0f) return;
+    float ux = gravX / gNorm, uy = gravY / gNorm, uz = gravZ / gNorm;
+
+    // 2. Динамическое ускорение без вертикальной составляющей
+    float dx = imu.ax - gravX, dy = imu.ay - gravY, dz = imu.az - gravZ;
+    float dv = dx * ux + dy * uy + dz * uz;
+    float hx = dx - dv * ux, hy = dy - dv * uy, hz = dz - dv * uz;
+
+    // 3. Продольная ось — направление, где горизонтальное ускорение сильнее всего
+    //    (главная компонента). Не зависит от того, как закреплён прибор
+    float kC = dt / (AXIS_TAU + dt);
+    cov[0] += kC * (hx * hx - cov[0]);
+    cov[1] += kC * (hx * hy - cov[1]);
+    cov[2] += kC * (hx * hz - cov[2]);
+    cov[3] += kC * (hy * hy - cov[3]);
+    cov[4] += kC * (hy * hz - cov[4]);
+    cov[5] += kC * (hz * hz - cov[5]);
+
+    // Одна итерация степенного метода на сэмпл: ось плавно сходится и не меняет знак
+    float nx = cov[0] * axisX + cov[1] * axisY + cov[2] * axisZ;
+    float ny = cov[1] * axisX + cov[3] * axisY + cov[4] * axisZ;
+    float nz = cov[2] * axisX + cov[4] * axisY + cov[5] * axisZ;
+    float nv = nx * ux + ny * uy + nz * uz;  // держим ось горизонтальной
+    nx -= nv * ux; ny -= nv * uy; nz -= nv * uz;
+    float nNorm = sqrtf(nx * nx + ny * ny + nz * nz);
+    if (nNorm > 1e-9f) {
+        axisX = nx / nNorm; axisY = ny / nNorm; axisZ = nz / nNorm;
+    }
+
+    // 4. Продольное ускорение, сглаженное от вибраций
+    float s = hx * axisX + hy * axisY + hz * axisZ;
+    surge += (dt / (SURGE_TAU + dt)) * (s - surge);
+
+    // 5. Адаптивный порог по огибающей амплитуды
+    surgePeak -= surgePeak * (dt / PEAK_DECAY_TAU);
+    if (fabsf(surge) > surgePeak) surgePeak = fabsf(surge);
+    float threshold = fmaxf(STROKE_MIN_ACCEL, STROKE_THRESHOLD_RATIO * surgePeak);
+
+    // Пока фильтры не устоялись, гребки не ищем
+    if (imu.time - imuStartTime < IMU_WARMUP_MS) return;
+
+    // 6. Триггер Шмитта: гребок — полный цикл разгон -> торможение.
+    //    Знак оси не важен: на цикл приходится ровно один переход вверх
+    if (!strokeHigh) {
+        if (surge > threshold) {
+            strokeHigh = true;
+            if (lastDetectTime == 0 || imu.time - lastDetectTime >= STROKE_MIN_INTERVAL_MS) {
+                lastDetectTime = imu.time;
+                onStrokeDetected(imu.time);
+            }
         }
-        // Защита от зависания: если гребок затянулся — сброс
-        if (dt > STROKE_MAX_INTERVAL) {
-            inStroke = false;
-        }
+    } else if (surge < -threshold) {
+        strokeHigh = false;
     }
 }
+
+void NavCore::onStrokeDetected(uint32_t t) {
+    if (gpsTrusted && !moving) {
+        // GPS уверенно говорит «стоим» — это может быть качка у причала.
+        // Откладываем: если следом подтвердится старт, это были первые гребки
+        if (pendingStrokeCount == MAX_PENDING_STROKES) {
+            for (uint8_t i = 1; i < MAX_PENDING_STROKES; i++) pendingStrokes[i - 1] = pendingStrokes[i];
+            pendingStrokeCount--;
+        }
+        pendingStrokes[pendingStrokeCount++] = t;
+        return;
+    }
+    countStroke(t);
+}
+
+void NavCore::countStroke(uint32_t t) {
+    state.strokeCount++;
+
+    uint32_t interval = t - lastStrokeTime;
+    if (lastStrokeTime != 0 && interval <= STROKE_MAX_INTERVAL_MS) {
+        float spm = 60000.0f / interval;
+        strokeRate = (strokeRate > 0.0f)
+            ? strokeRate + STROKE_RATE_ALPHA * (spm - strokeRate)
+            : spm;
+    }
+    lastStrokeTime = t;
+}
+
+void NavCore::updatePendingStrokes(uint32_t now) {
+    if (pendingStrokeCount == 0) return;
+
+    // Старт подтверждён (или GPS больше не уверен в стоянке) — засчитываем свежие
+    bool release = !(gpsTrusted && !moving);
+
+    uint8_t kept = 0;
+    for (uint8_t i = 0; i < pendingStrokeCount; i++) {
+        if (now - pendingStrokes[i] > STROKE_PENDING_WINDOW_MS) continue;  // устарел — была качка
+        if (release) countStroke(pendingStrokes[i]);
+        else pendingStrokes[kept++] = pendingStrokes[i];
+    }
+    pendingStrokeCount = kept;
+}
+
+
+// ============================================================================
+// ГЛАВНЫЙ ЦИКЛ
+// ============================================================================
 
 void NavCore::update(const GpsData& gps, const ImuData& imu) {
     uint32_t now = millis();
 
-    // Инициализация
-    if (startTime == 0) {
+    if (!started) {
+        started = true;
         startTime = now;
-        lastTime = now;
-        lastGpsTime = now;
     }
-
-    float dt = (now - lastTime) / 1000.0f;
-    if (dt <= 0.0f) dt = 0.001f;
-    if (dt > 0.5f)  dt = 0.5f;
-    lastTime = now;
-
     state.totalTime = now - startTime;
 
-    // ОПРЕДЕЛЯЕМ РЕЖИМ РАБОТЫ
-    enum class Mode { EXCELLENT, POOR, DEAD };
-    Mode mode;
-    
-    if (gpsQuality > GPS_QUALITY_EXCELLENT) {
-        mode = Mode::EXCELLENT;
-    } else if (gpsQuality > GPS_QUALITY_DEAD) {
-        mode = Mode::POOR;
-    } else {
-        mode = Mode::DEAD;
+    // Обрабатываем только новые пакеты: update() зовётся на каждом loop()
+    if (gps.time != 0 && gps.time != lastGpsStamp) {
+        lastGpsStamp = gps.time;
+        processGps(gps, now);
+    }
+    updatePendingStrokes(now);  // до IMU: гребки засчитываются по порядку
+    if (imu.time != 0 && imu.time != lastImuStamp) {
+        processImu(imu);
     }
 
-    // IMU PREDICTION
-    float ax = imu.ax - axBias;
-    float ay = imu.ay - ayBias;
-
-    // Компенсация гравитации
-    float roll = atan2f(imu.ay, imu.az);
-    ax -= sinf(roll) * GRAVITY;
-
-    // Интегрирование
-    vx += ax * dt;
-    vy += ay * dt;
-    x  += vx * dt;
-    y  += vy * dt;
-
-    // Адаптивное затухание в зависимости от режима
-    float damping;
-    switch (mode) {
-        case Mode::EXCELLENT: damping = DAMPING_EXCELLENT; break;
-        case Mode::POOR:      damping = DAMPING_POOR;      break;
-        case Mode::DEAD:      damping = DAMPING_DEAD;      break;
+    // Таймауты
+    if (gpsTrusted && now - lastGoodFixTime > GPS_TIMEOUT_MS) {
+        gpsTrusted = false;
+        goodFixStreak = 0;
     }
-    vx *= damping;
-    vy *= damping;
-
-    // GPS MEASUREMENT UPDATE
-    bool gpsValid = (gps.time > 0);
-
-    if (gpsValid && mode != Mode::DEAD) {
-        float gpsX = 0.0f, gpsY = 0.0f;
-        gpsToXY(gps.lat, gps.lon, gpsX, gpsY);
-
-        float jump = calcDistance(x, y, gpsX, gpsY);
-        float newQuality = estimateGpsQuality(gps, jump);
-
-        // Плавное обновление качества
-        gpsQuality = gpsQuality * 0.92f + newQuality * 0.08f;
-
-        // Коррекция только если GPS достаточно хорош
-        if (gpsQuality > GPS_QUALITY_POOR && jump < 100.0f) {
-            float w = gpsQuality * 0.5f;
-
-            // Позиционная коррекция
-            x = x * (1.0f - w) + gpsX * w;
-            y = y * (1.0f - w) + gpsY * w;
-
-            // Коррекция скорости
-            float imuSpeed = sqrtf(vx * vx + vy * vy);
-            if (imuSpeed > MIN_SPEED_THRESHOLD && gps.speed > MIN_SPEED_THRESHOLD) {
-                float ratio = gps.speed / imuSpeed;
-                ratio = constrain(ratio, 0.5f, 2.0f);
-                ratio = 1.0f + (ratio - 1.0f) * w;
-                vx *= ratio;
-                vy *= ratio;
-            } else if (gps.speed > MIN_SPEED_THRESHOLD && imuSpeed <= MIN_SPEED_THRESHOLD) {
-                float dx = gpsX - x;
-                float dy = gpsY - y;
-                float dist = sqrtf(dx * dx + dy * dy);
-                if (dist > 0.1f) {
-                    vx = (dx / dist) * gps.speed * w;
-                    vy = (dy / dist) * gps.speed * w;
-                }
-            }
-        }
-
-        lastGpsTime = now;
-    } else {
-        // GPS пропал или полностью невалиден — качество деградирует
-        if (mode == Mode::DEAD) {
-            gpsQuality *= 0.95f;  // быстрее деградирует в DEAD режиме
-        } else {
-            gpsQuality *= GPS_QUALITY_DECAY;
-        }
+    if (lastStrokeTime != 0 && now - lastStrokeTime > STROKE_MAX_INTERVAL_MS) {
+        strokeRate = 0.0f;
     }
 
-    // ZUPT — Zero Velocity Update (адаптивный)
-    float azDyn = fabsf(imu.az - GRAVITY);
-    float totalAccel = sqrtf(ax * ax + ay * ay + azDyn * azDyn);
+    // Дистанция и скорость
+    state.distance   = (float)totalDistance;
+    state.movingTime = movingTimeMs;
+    state.avgSpeed   = (movingTimeMs > 0) ? (float)(totalDistance / (movingTimeMs / 1000.0)) : 0.0f;
 
-    // Порог ZUPT зависит от режима
-    float zuptThreshold = (mode == Mode::DEAD) ? ZUPT_ACCEL_THRESHOLD_DEAD : ZUPT_ACCEL_THRESHOLD_GOOD;
-
-    if (totalAccel < zuptThreshold && !inStroke) {
-        // В режиме DEAD — жёсткое обнуление
-        if (mode == Mode::DEAD) {
-            vx = 0.0f;
-            vy = 0.0f;
-        } else {
-            // В других режимах — плавное затухание
-            vx *= 0.3f;
-            vy *= 0.3f;
-        }
-    }
-
-    // Velocity clamping — если скорость очень мала и нет GPS, обнуляем
-    float speed = sqrtf(vx * vx + vy * vy);
-    if (mode == Mode::DEAD && speed < VELOCITY_CLAMP_THRESHOLD) {
-        vx = 0.0f;
-        vy = 0.0f;
-    }
-
-    // HARD LIMIT
-
-    speed = sqrtf(vx * vx + vy * vy);
-    if (speed > MAX_ROWING_SPEED) {
-        float scale = MAX_ROWING_SPEED / speed;
-        vx *= scale;
-        vy *= scale;
-        speed = MAX_ROWING_SPEED;
-    }
-
-    // ДЕТЕКТОР ГРЕБКОВ
-    detectStroke(imu, now);
-
-
-    // ОНЛАЙН-КАЛИБРОВКА BIAS (адаптивная скорость)
-    float imuSpeed = sqrtf(vx * vx + vy * vy);
-    if (imuSpeed < MIN_SPEED_THRESHOLD && !inStroke) {
-        float biasAlpha = (mode == Mode::DEAD) ? BIAS_ALPHA_FAST : BIAS_ALPHA_SLOW;
-        axBias = axBias * (1.0f - biasAlpha) + imu.ax * biasAlpha;
-        ayBias = ayBias * (1.0f - biasAlpha) + imu.ay * biasAlpha;
-    }
-
-    // ВЫХОДНЫЕ МЕТРИКИ
-    state.distance = sqrtf(x * x + y * y);
+    float speed = (gpsTrusted && (moving || provisional)) ? smoothedSpeed : 0.0f;
     state.currentSpeed = speed;
+    state.pace500 = (speed >= MIN_PACE_SPEED) ? 500.0f / speed : 0.0f;
 
-    float t = state.totalTime / 1000.0f;
-    state.avgSpeed = (t > 0.0f) ? (state.distance / t) : 0.0f;
+    // Гребки
+    state.strokeRate = strokeRate;
+    state.inStroke   = strokeHigh;
 
-    if (state.currentSpeed > MIN_SPEED_THRESHOLD) {
-        state.pace500 = 500.0f / state.currentSpeed;
-    } else {
-        state.pace500 = 0.0f;
-    }
+    // Время: между пакетами GPS досчитываем по millis()
+    state.utcTime = (unixBase != 0) ? unixBase + (now - unixBaseMillis) / 1000 : 0;
 
     // Статусы
-    state.gpsValid   = gpsValid;
-    state.gpsTrusted = (gpsQuality > GPS_QUALITY_POOR);
-    state.imuValid   = true;
+    bool gpsFresh = gps.time != 0 && now - gps.time < GPS_TIMEOUT_MS;
+    state.gpsValid   = gpsFresh && gps.fixOk;
+    state.gpsTrusted = gpsTrusted;
+    state.imuValid   = imuInitialized && now - lastImuStamp < IMU_TIMEOUT_MS;
     state.valid      = true;
+    state.isMoving   = moving;
 }
 
 const NavigationState& NavCore::get() const {

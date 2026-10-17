@@ -5,7 +5,7 @@
 class imu {
 private:
     std::unique_ptr<imurepo> driver; // DI
-    ImuData lastValue; // кеш последнего значения
+    ImuData lastValue{}; // кеш последнего значения
 public:
     // Конструктор
     explicit imu(std::unique_ptr<imurepo> d) : driver(std::move(d)) {}

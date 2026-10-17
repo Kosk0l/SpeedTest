@@ -15,9 +15,21 @@ bool gps::update() {
     out.lat   = raw.lat;
     out.lon   = raw.lon;
     out.alt   = raw.alt;
-    
+
     out.speed = raw.speed;
-    out.time  = raw.time;
+    out.velN  = raw.velN;
+    out.velE  = raw.velE;
+    out.sAcc  = raw.sAcc;
+    out.hAcc  = raw.hAcc;
+    out.pDop  = raw.pDop;
+
+    out.fixType    = raw.fixType;
+    out.fixOk      = raw.fixOk;
+    out.satellites = raw.satellites;
+
+    out.iTow     = raw.iTow;
+    out.unixTime = raw.unixTime;
+    out.time     = raw.time;
 
     // cache update
     lastValue = out;

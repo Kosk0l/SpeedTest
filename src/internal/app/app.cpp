@@ -18,11 +18,9 @@ bool App::init() {
 void App::update() {
     uint32_t now = millis();
 
-    // GPS
-    if (now - lastGpsUpdate >= 200) {
-        gpsService.update();
-        lastGpsUpdate = now;
-    }
+    // GPS: опрашиваем на каждом цикле. В режиме autoPVT getPVT() не блокирует,
+    // а редкий опрос переполнял буфер UART и терял пакеты
+    gpsService.update();
 
     // IMU
     if (now - lastImuUpdate >= 20) {

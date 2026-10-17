@@ -1,7 +1,8 @@
 #include <internal/gps/repo/NeoM9NRepo.h>
 
 bool NeoM9NRepo::init() {
-    // UART
+    // UART. Буфер увеличиваем до begin(): стандартных 256 байт мало
+    serial.setRxBufferSize(1024);
     serial.begin(38400, SERIAL_8N1, 16, 17);
     delay(100);
 
@@ -11,15 +12,14 @@ bool NeoM9NRepo::init() {
         return false;
     }
 
-    // Частота обновления 
+    // Только UBX на UART: NMEA забивает буфер, и PVT-пакеты теряются
+    gnss.setUART1Output(COM_TYPE_UBX);
+    // Частота обновления
     gnss.setNavigationFrequency(5);
-    // Проверить что получает PVT данные
+    // Модель динамики: без допущений о высоте (озёра и реки не на уровне моря)
+    gnss.setDynamicModel(DYN_MODEL_PORTABLE);
+    // PVT приходит сам на каждой эпохе, getPVT() не блокирует
     gnss.setAutoPVT(true);
-    // уменьшить лишний вывод NMEA
-    gnss.setI2COutput(COM_TYPE_UBX); 
-
-    // 4. Проверка фикса
-    int fixType = gnss.getFixType();
 
     initialized = true;
     return true;
@@ -31,21 +31,35 @@ bool NeoM9NRepo::readRaw(GpsRawData& out) {
 
     // Проверка, есть ли новые данные
     if (!gnss.getPVT()) {
-        return false; 
+        return false;
     }
 
     // Собрать данные с устройства
+    out.iTow       = gnss.getTimeOfWeek();
+    out.fixType    = gnss.getFixType();
+    out.fixOk      = gnss.getGnssFixOk() && !gnss.getInvalidLlh();
+    out.satellites = gnss.getSIV();
+
     long lat = gnss.getLatitude();
-    long lon = gnss.getLongitude(); 
+    long lon = gnss.getLongitude();
     long alt = gnss.getAltitude();
 
     // Нормализация 1
     out.lat = lat / 1e7;
     out.lon = lon / 1e7;
-    out.alt = alt / 1000.0; 
+    out.alt = alt / 1000.0;
+
+    out.speed = gnss.getGroundSpeed() / 1000.0f;       // мм/с -> м/с
+    out.velN  = gnss.getNedNorthVel() / 1000.0f;
+    out.velE  = gnss.getNedEastVel() / 1000.0f;
+    out.sAcc  = gnss.getSpeedAccEst() / 1000.0f;       // мм/с -> м/с
+    out.hAcc  = gnss.getHorizontalAccEst() / 1000.0f;  // мм -> м
+    out.pDop  = gnss.getPDOP() / 100.0f;
+
+    bool timeValid = gnss.getDateValid() && gnss.getTimeValid();
+    out.unixTime = timeValid ? gnss.getUnixEpoch() : 0;
 
     out.time = millis();
-    out.speed = gnss.getGroundSpeed() / 1000.0;
 
     return true;
 }

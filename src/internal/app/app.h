@@ -20,7 +20,6 @@ private:
     display displayService;
 
     // Sheduler
-    uint32_t lastGpsUpdate = 0;
     uint32_t lastImuUpdate = 0;
     uint32_t lastDisplayUpdate = 0;
 public:
