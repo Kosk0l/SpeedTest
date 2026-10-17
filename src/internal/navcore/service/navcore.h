@@ -72,10 +72,28 @@ private:
     float cov[6] = {0};                               // ковариация горизонтального ускорения: xx xy xz yy yz zz
     float axisX = 1.0f, axisY = 0.0f, axisZ = 0.0f;   // продольная ось лодки (главная компонента)
     float surge = 0.0f;                               // продольное ускорение, сглаженное
-    float surgePeak = 0.0f;                           // огибающая амплитуды
+    float cycleMax = 0.0f, cycleMin = 0.0f;           // размах текущего цикла
+
+    // Типичная амплитуда гребка: медиана последних циклов
+    static constexpr uint8_t AMP_HISTORY_SIZE = 5;
+    float ampHistory[AMP_HISTORY_SIZE] = {0};
+    uint8_t ampHead = 0;
+    uint8_t ampCount = 0;
 
     bool strokeHigh = false;
-    uint32_t lastDetectTime = 0;    // последний сработавший детектор (защита от двойных)
+    uint32_t lastTriggerTime = 0;   // последнее срабатывание триггера, любое
+
+    // Ритм: гребок засчитывается, только если повторяется с ровным периодом
+    static constexpr uint8_t RHYTHM_CANDIDATES = 5;
+    uint32_t candidateTime[RHYTHM_CANDIDATES] = {0};
+    float candidateAmp[RHYTHM_CANDIDATES] = {0};
+    uint8_t candidateCount = 0;
+    bool rhythmLocked = false;
+    float strokePeriodMs = 0.0f;
+    uint32_t lastAcceptedTime = 0;
+    bool dirtySinceAccepted = false;  // были лишние срабатывания в текущем цикле
+    uint8_t dirtyCycles = 0;          // циклов подряд с лишними срабатываниями
+
     uint32_t lastStrokeTime = 0;    // последний засчитанный гребок
     float strokeRate = 0.0f;
 
@@ -90,6 +108,9 @@ private:
     void rememberFix(const GpsData& gps);
     void updateMotion(const GpsData& gps, uint32_t dtMs);
     void processImu(const ImuData& imu);
+    float medianAmplitude() const;
+    void resetRhythm();
+    void onStrokeTrigger(uint32_t t, float cycleAmp);
     void onStrokeDetected(uint32_t t);
     void countStroke(uint32_t t);
     void updatePendingStrokes(uint32_t now);

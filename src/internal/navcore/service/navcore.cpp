@@ -48,13 +48,15 @@ constexpr float MIN_PACE_SPEED   = 1.0f;       // м/с — медленнее �
 constexpr float    GRAVITY_TAU            = 4.0f;    // с — ФНЧ гравитации (период гребка 1–3.5 с)
 constexpr float    AXIS_TAU               = 5.0f;    // с — усреднение ковариации для оси лодки
 constexpr float    SURGE_TAU              = 0.05f;   // с — сглаживание вибраций (~3 Гц)
-constexpr float    PEAK_DECAY_TAU         = 3.0f;    // с — спад огибающей амплитуды
 constexpr float    STROKE_MIN_ACCEL       = 0.8f;    // м/с2 — порог не ниже этого (шум, качка)
-constexpr float    STROKE_THRESHOLD_RATIO = 0.35f;   // порог — доля от огибающей
-constexpr uint32_t STROKE_MIN_INTERVAL_MS = 1000;    // 60 гребков/мин максимум
-constexpr uint32_t STROKE_MAX_INTERVAL_MS = 6000;    // 10 гребков/мин — реже темп сбрасываем
+constexpr float    STROKE_THRESHOLD_RATIO = 0.3f;    // порог — доля от типичной амплитуды гребка
+constexpr uint32_t STROKE_MIN_INTERVAL_MS = 1000;    // 60 гребков/мин — чаще это не гребля
+constexpr uint32_t STROKE_MAX_INTERVAL_MS = 5000;    // 12 гребков/мин — реже ритм потерян
+constexpr float    STROKE_RHYTHM_RATIO    = 1.3f;    // интервалы различаются не больше чем на 30%
+constexpr float    STROKE_AMP_RATIO       = 2.5f;    // и амплитуды — не больше чем в 2.5 раза
+constexpr float    STROKE_PERIOD_ALPHA    = 0.3f;    // сглаживание периода гребка
 constexpr float    STROKE_RATE_ALPHA      = 0.4f;    // сглаживание темпа
-constexpr uint32_t STROKE_PENDING_WINDOW_MS = 15000; // гребок на стоянке ждёт подтверждения стартом
+constexpr uint32_t STROKE_PENDING_WINDOW_MS = 20000; // гребок на стоянке ждёт подтверждения стартом
 constexpr float    IMU_MAX_DT             = 0.1f;    // с — ограничение шага при пропусках
 constexpr uint32_t IMU_TIMEOUT_MS         = 500;
 constexpr uint32_t IMU_WARMUP_MS          = 2000;    // после включения фильтры устаиваются
@@ -374,27 +376,127 @@ void NavCore::processImu(const ImuData& imu) {
     float s = hx * axisX + hy * axisY + hz * axisZ;
     surge += (dt / (SURGE_TAU + dt)) * (s - surge);
 
-    // 5. Адаптивный порог по огибающей амплитуды
-    surgePeak -= surgePeak * (dt / PEAK_DECAY_TAU);
-    if (fabsf(surge) > surgePeak) surgePeak = fabsf(surge);
-    float threshold = fmaxf(STROKE_MIN_ACCEL, STROKE_THRESHOLD_RATIO * surgePeak);
+    // 5. Порог — доля от медианной амплитуды последних гребков:
+    //    одиночный удар его не задирает, лёгкая гребля не теряется
+    cycleMax = fmaxf(cycleMax, surge);
+    cycleMin = fminf(cycleMin, surge);
+    float threshold = fmaxf(STROKE_MIN_ACCEL, STROKE_THRESHOLD_RATIO * medianAmplitude());
 
     // Пока фильтры не устоялись, гребки не ищем
     if (imu.time - imuStartTime < IMU_WARMUP_MS) return;
 
-    // 6. Триггер Шмитта: гребок — полный цикл разгон -> торможение.
+    // 6. Триггер Шмитта: одно срабатывание на полный цикл разгон -> торможение.
     //    Знак оси не важен: на цикл приходится ровно один переход вверх
     if (!strokeHigh) {
         if (surge > threshold) {
             strokeHigh = true;
-            if (lastDetectTime == 0 || imu.time - lastDetectTime >= STROKE_MIN_INTERVAL_MS) {
-                lastDetectTime = imu.time;
-                onStrokeDetected(imu.time);
-            }
+            float cycleAmp = 0.5f * (cycleMax - cycleMin);
+            cycleMax = cycleMin = surge;
+            onStrokeTrigger(imu.time, cycleAmp);
         }
     } else if (surge < -threshold) {
         strokeHigh = false;
     }
+}
+
+float NavCore::medianAmplitude() const {
+    if (ampCount == 0) return 0.0f;
+    float sorted[AMP_HISTORY_SIZE];
+    for (uint8_t i = 0; i < ampCount; i++) {
+        float v = ampHistory[i];
+        uint8_t j = i;
+        for (; j > 0 && sorted[j - 1] > v; j--) sorted[j] = sorted[j - 1];
+        sorted[j] = v;
+    }
+    return sorted[ampCount / 2];
+}
+
+void NavCore::resetRhythm() {
+    rhythmLocked = false;
+    candidateCount = 0;
+    dirtyCycles = 0;
+    dirtySinceAccepted = false;
+}
+
+void NavCore::onStrokeTrigger(uint32_t t, float cycleAmp) {
+    // 7. Проверка ритма. Гребля — это серия циклов с ровным периодом 1–5 с.
+    //    Удар, тряска, шаги так не выглядят
+    uint32_t sinceTrigger = lastTriggerTime ? t - lastTriggerTime : UINT32_MAX;
+    lastTriggerTime = t;
+
+    if (sinceTrigger >= STROKE_MIN_INTERVAL_MS && sinceTrigger <= STROKE_MAX_INTERVAL_MS) {
+        ampHistory[ampHead] = cycleAmp;
+        ampHead = (ampHead + 1) % AMP_HISTORY_SIZE;
+        if (ampCount < AMP_HISTORY_SIZE) ampCount++;
+    }
+
+    if (rhythmLocked) {
+        // Следующий гребок ждём через период ±30%
+        float ratio = (t - lastAcceptedTime) / strokePeriodMs;
+
+        if (ratio < 1.0f / STROKE_RHYTHM_RATIO) {
+            // Раньше срока — лишнее срабатывание внутри цикла: всплеск, удар
+            dirtySinceAccepted = true;
+            return;
+        }
+
+        if (ratio <= STROKE_RHYTHM_RATIO && t - lastAcceptedTime <= STROKE_MAX_INTERVAL_MS) {
+            dirtyCycles = dirtySinceAccepted ? dirtyCycles + 1 : 0;
+            dirtySinceAccepted = false;
+
+            if (dirtyCycles < 2) {
+                strokePeriodMs += STROKE_PERIOD_ALPHA * ((t - lastAcceptedTime) - strokePeriodMs);
+                lastAcceptedTime = t;
+                onStrokeDetected(t);
+                return;
+            }
+            // Два цикла подряд с лишними срабатываниями — это уже не гребля (шаги, тряска)
+        }
+
+        // Ритм сбился (пауза, пропуск, не гребля). Срабатывание открывает новую серию,
+        // при повторном захвате она засчитается целиком — гребки не теряются
+        resetRhythm();
+    }
+
+    // Поиск ритма: копим серию срабатываний
+    if (sinceTrigger < STROKE_MIN_INTERVAL_MS || sinceTrigger > STROKE_MAX_INTERVAL_MS) {
+        candidateCount = 0;  // слишком часто или слишком редко для гребли — серия заново
+    }
+    if (candidateCount == RHYTHM_CANDIDATES) {
+        for (uint8_t i = 1; i < RHYTHM_CANDIDATES; i++) {
+            candidateTime[i - 1] = candidateTime[i];
+            candidateAmp[i - 1]  = candidateAmp[i];
+        }
+        candidateCount--;
+    }
+    candidateTime[candidateCount] = t;
+    candidateAmp[candidateCount]  = cycleAmp;
+    candidateCount++;
+
+    if (candidateCount < RHYTHM_CANDIDATES) return;
+
+    // Серия из RHYTHM_CANDIDATES срабатываний: соседние интервалы ровные,
+    // амплитуды циклов внутри серии похожи. Случайные удары так не ложатся
+    float ampMin = candidateAmp[1], ampMax = candidateAmp[1];
+    for (uint8_t i = 1; i < RHYTHM_CANDIDATES; i++) {
+        ampMin = fminf(ampMin, candidateAmp[i]);
+        ampMax = fmaxf(ampMax, candidateAmp[i]);
+        if (i >= 2) {
+            float prev = (float)(candidateTime[i - 1] - candidateTime[i - 2]);
+            float curr = (float)(candidateTime[i] - candidateTime[i - 1]);
+            if (curr > prev * STROKE_RHYTHM_RATIO || prev > curr * STROKE_RHYTHM_RATIO) return;
+        }
+    }
+    if (ampMax > ampMin * STROKE_AMP_RATIO) return;
+
+    // Ритм пойман — засчитываем всю серию, первые гребки не теряются
+    rhythmLocked = true;
+    strokePeriodMs = (float)(candidateTime[RHYTHM_CANDIDATES - 1] - candidateTime[RHYTHM_CANDIDATES - 2]);
+    lastAcceptedTime = candidateTime[RHYTHM_CANDIDATES - 1];
+    dirtyCycles = 0;
+    dirtySinceAccepted = false;
+    for (uint8_t i = 0; i < RHYTHM_CANDIDATES; i++) onStrokeDetected(candidateTime[i]);
+    candidateCount = 0;
 }
 
 void NavCore::onStrokeDetected(uint32_t t) {
@@ -470,6 +572,12 @@ void NavCore::update(const GpsData& gps, const ImuData& imu) {
     }
     if (lastStrokeTime != 0 && now - lastStrokeTime > STROKE_MAX_INTERVAL_MS) {
         strokeRate = 0.0f;
+    }
+    if (lastTriggerTime != 0 && now - lastTriggerTime > STROKE_MAX_INTERVAL_MS) {
+        // Давно нет срабатываний: ритм и типичная амплитуда устарели
+        resetRhythm();
+        lastTriggerTime = 0;
+        ampCount = 0;
     }
 
     // Дистанция и скорость
